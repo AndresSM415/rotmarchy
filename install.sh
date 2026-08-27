@@ -2,8 +2,8 @@
 #
 # Dev install: copy this folder into ~/.config/omarchy/plugins/ and enable it.
 #
-# Once the plugin is published, the real install path is:
-#   omarchy plugin add https://github.com/<you>/omarchy-rotmarchy --enable
+# For anyone not developing it, the real install path is:
+#   omarchy plugin add https://github.com/AndresSM415/rotmarchy --enable
 #
 # A copy rather than a symlink on purpose — the marketplace validator rejects
 # symlinks inside a plugin folder, so developing through one would hide a

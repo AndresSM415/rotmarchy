@@ -53,12 +53,21 @@ yt-dlp -F "https://www.youtube.com/watch?v=n_Dv4JMiwK8"
 ## Install
 
 ```bash
-./install.sh
+omarchy plugin add https://github.com/AndresSM415/rotmarchy --enable
 ```
 
-Copies the folder into `~/.config/omarchy/plugins/`, enables it, and restarts
-the shell. A copy rather than a symlink on purpose: the marketplace validator
-rejects symlinks inside a plugin folder.
+Or to hack on it locally:
+
+```bash
+git clone https://github.com/AndresSM415/rotmarchy && cd rotmarchy && ./install.sh
+```
+
+`install.sh` copies the folder into `~/.config/omarchy/plugins/`, enables it,
+and restarts the shell. A copy rather than a symlink on purpose: the
+marketplace validator rejects symlinks inside a plugin folder.
+
+Like every Omarchy plugin, this runs unsandboxed with your user permissions.
+There is no sandbox to fall back on, so read it before you install it.
 
 ## Settings
 
