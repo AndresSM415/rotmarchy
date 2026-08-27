@@ -5,7 +5,7 @@
   "version": "2.0.0",
   "author": "AndresSM415",
   "license": "MIT",
-  "description": "Click the brain in your bar and a random brainrot video appears somewhere on screen, cropped to a phone shape and silent. Click again for another one.",
+  "description": "Click the face in your bar and a random brainrot video appears somewhere on screen, cropped to a phone shape and silent. Click again for another one.",
   "kinds": [
     "bar-widget"
   ],
