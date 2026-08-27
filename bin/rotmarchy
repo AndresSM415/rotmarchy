@@ -1,0 +1,275 @@
+#!/bin/bash
+#
+# rotmarchy — summon brainrot.
+#
+# Click, and a random video appears somewhere on screen, cropped to a phone
+# shape. Click again and another one appears. That is the whole idea.
+#
+# mpv ships the yt-dlp *integration* (the built-in ytdl_hook behind
+# --ytdl-format) but not the yt-dlp *binary*. Both packages are required.
+
+set -euo pipefail
+
+readonly APP_ID="Rotmarchy"
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(dirname "$(dirname "$SELF")")"
+SOURCES="${ROTMARCHY_SOURCES:-$ROOT/share/sources.tsv}"
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rotmarchy"
+
+# One knob drives both the download cap and the window size. The video is
+# cropped to 9:16, never scaled, so the window is exactly as many pixels tall
+# as the source and 9/16 as many wide.
+#
+# The width must round the way ffmpeg's crop filter rounds, or the window is a
+# pixel off and mpv scales to cover the difference — defeating the whole point.
+# 1080*9/16 is 607.5, which ffmpeg resolves to 608; plain integer division
+# would truncate to 607. Round half up instead.
+HEIGHT="${ROTMARCHY_HEIGHT:-720}"
+
+# 9:16 width for a given height, rounded the way ffmpeg's crop filter rounds.
+width_for() { printf '%s' "$(( ($1 * 18 / 16 + 1) / 2 ))"; }
+
+WIDTH="$(width_for "$HEIGHT")"
+
+# The window is deliberately smaller than the video it shows. The crop still
+# happens at full source resolution — this only scales the presentation down,
+# so the picture stays sharp rather than being a low-res stream stretched up.
+WIN_SCALE="${ROTMARCHY_WINDOW_SCALE:-60}"
+WIN_H=$(( HEIGHT * WIN_SCALE / 100 ))
+WIN_W="$(width_for "$WIN_H")"
+
+# No audio, so no need to fetch an audio stream at all.
+FORMAT="${ROTMARCHY_FORMAT:-bv*[height<=$HEIGHT]/b[height<=$HEIGHT]/b}"
+
+die() { printf 'rotmarchy: %s\n' "$*" >&2; exit 1; }
+
+require_deps() {
+  local missing=()
+  command -v mpv >/dev/null || missing+=(mpv)
+  command -v yt-dlp >/dev/null || missing+=(yt-dlp)
+  if (( ${#missing[@]} )); then
+    printf 'rotmarchy: missing required package(s): %s\n\n' "${missing[*]}" >&2
+    printf '  sudo pacman -S --needed mpv yt-dlp\n\n' >&2
+    printf 'mpv bundles the yt-dlp integration, not yt-dlp itself — you need both.\n' >&2
+    exit 1
+  fi
+}
+
+categories() {
+  awk -F'\t' '!/^#/ && NF>=3 { print $1 }' "$SOURCES" | sort -u
+}
+
+pick() {
+  local want="${1:-random}" rows
+  if [[ $want == random || -z $want ]]; then
+    rows="$(awk -F'\t' '!/^#/ && NF>=3 { print $2"\t"$3"\t"$4 }' "$SOURCES")"
+  else
+    rows="$(awk -F'\t' -v c="$want" '!/^#/ && NF>=3 && $1==c { print $2"\t"$3"\t"$4 }' "$SOURCES")"
+  fi
+  [[ -n $rows ]] || die "no sources for category '$want' (try: rotmarchy list)"
+  printf '%s\n' "$rows" | shuf -n 1
+}
+
+# Random seek offset, holding back the last 5 minutes so we never open on the
+# outro card. Short clips just start from the top.
+random_start() {
+  local duration="$1" window
+  window=$(( duration - 300 ))
+  if (( window <= 0 )); then printf '0'; else printf '%s' "$(( RANDOM % window ))"; fi
+}
+
+resolve_media() {
+  local id="$1" hit
+  hit="$(find "$CACHE_DIR" -maxdepth 1 -name "$id.*" -print -quit 2>/dev/null || true)"
+  if [[ -n $hit ]]; then printf '%s' "$hit"; else printf 'https://www.youtube.com/watch?v=%s' "$id"; fi
+}
+
+# Drop the window somewhere random on the focused monitor.
+#
+# Hyprland rules are static, so the randomness has to happen after the window
+# exists: wait for it to map, then resize and move it by address. Runs in the
+# background so playback is never held up, and degrades to "wherever Hyprland
+# put it" if hyprctl or jq is missing.
+# Matched by title, not pid: `setsid` forks, so $! is the setsid wrapper and
+# the mpv process that actually owns the window has a different pid. A unique
+# per-launch title is also what makes spamming the button safe — two launches
+# racing each other each find their own window instead of both grabbing the
+# first one.
+
+# Hyprland 0.5x parses `hyprctl dispatch` as Lua, so the old
+# `dispatch movewindowpixel exact X Y,address:0x..` string is a syntax error
+# now. Try the Lua form first and fall back to the legacy one, exactly as
+# omarchy-hyprland-window-pop does.
+hypr_dispatch() {
+  local lua="$1"; shift
+  hyprctl dispatch "$lua" >/dev/null 2>&1 || hyprctl dispatch "$@" >/dev/null 2>&1 || true
+}
+
+place_window() {
+  local token="$1" addr="" tries=0
+  command -v hyprctl >/dev/null || return 0
+  command -v jq >/dev/null || return 0
+
+  # Generous: the window only maps once yt-dlp has resolved the stream, which
+  # takes several seconds on a cold start and longer on a slow link.
+  while (( tries++ < 200 )); do
+    addr="$(hyprctl clients -j 2>/dev/null \
+      | jq -r --arg t "$token" '.[] | select(.title==$t) | .address' | head -1)"
+    [[ -n $addr && $addr != null ]] && break
+    sleep 0.1
+  done
+  [[ -n $addr && $addr != null ]] || return 0
+
+  local mw mh mx my
+  read -r mw mh mx my < <(hyprctl monitors -j 2>/dev/null \
+    | jq -r '.[] | select(.focused==true) | "\(.width) \(.height) \(.x) \(.y)"')
+  [[ -n ${mw:-} ]] || return 0
+
+  # Keep the whole window on screen: the random range is the slack between the
+  # monitor and the window, and a margin keeps it clear of the bar.
+  local margin=60 spanx spany x y
+  spanx=$(( mw - WIN_W - margin * 2 ))
+  spany=$(( mh - WIN_H - margin * 2 ))
+  (( spanx < 1 )) && spanx=1
+  (( spany < 1 )) && spany=1
+  x=$(( mx + margin + RANDOM % spanx ))
+  y=$(( my + margin + RANDOM % spany ))
+
+  local window="address:$addr"
+
+  # Resize first: the move is absolute, so placing a still-wrong-sized window
+  # would leave it hanging off the edge.
+  hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = $WIN_W, y = $WIN_H })" \
+    resizewindowpixel "exact $WIN_W $WIN_H,$window"
+  hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $x, y = $y })" \
+    movewindowpixel "exact $x $y,$window"
+}
+
+cmd_play() {
+  local category="${1:-random}"
+  require_deps
+
+  local duration id title start media token
+  IFS=$'\t' read -r duration id title < <(pick "$category")
+  start="$(random_start "$duration")"
+  media="$(resolve_media "$id")"
+  token="Rotmarchy $$-$RANDOM"
+
+  printf '▶  %s\n   video %sx%s · window %sx%s · seeking to %ss\n' \
+    "$title" "$WIDTH" "$HEIGHT" "$WIN_W" "$WIN_H" "$start"
+
+  # crop=w=ih*9/16:h=ih takes a full-height, phone-shaped slice out of the
+  # middle of the frame. It crops rather than scales, so the pixels are the
+  # source's own — a 720p video yields a real 405x720 window, not a squashed
+  # 1280x720 one.
+  #
+  # Default input bindings stay ON so `q` closes a window. With several of
+  # these on screen at once, being able to dismiss one is the difference
+  # between a toy and a hostage situation.
+  setsid mpv \
+    --wayland-app-id="$APP_ID" \
+    --title="$token" \
+    --ytdl-format="$FORMAT" \
+    --vf=crop=w=ih*9/16:h=ih \
+    --start="$start" \
+    --loop-file=inf \
+    --no-audio \
+    --no-osc \
+    --msg-level=all=error \
+    "$media" >/dev/null 2>&1 &
+
+  place_window "$token" &
+}
+
+cmd_cache() {
+  local category="${1:-random}"
+  require_deps
+  mkdir -p "$CACHE_DIR"
+
+  local duration id title
+  IFS=$'\t' read -r duration id title < <(pick "$category")
+
+  if compgen -G "$CACHE_DIR/$id.*" >/dev/null; then
+    printf '✓  already cached: %s\n' "$title"; return
+  fi
+
+  printf '↓  caching: %s\n' "$title"
+  yt-dlp \
+    --format "$FORMAT" \
+    --output "$CACHE_DIR/%(id)s.%(ext)s" \
+    "https://www.youtube.com/watch?v=$id"
+}
+
+is_running() {
+  pgrep -f "wayland-app-id=$APP_ID" >/dev/null 2>&1
+}
+
+cmd_stop() {
+  if pkill -f "wayland-app-id=$APP_ID" 2>/dev/null; then
+    echo "⏹  stopped"
+  else
+    echo "nothing playing"
+  fi
+  return 0
+}
+
+cmd_list() {
+  printf 'Sources: %s\n\n' "$SOURCES"
+  local c n
+  for c in $(categories); do
+    n="$(awk -F'\t' -v c="$c" '!/^#/ && NF>=3 && $1==c' "$SOURCES" | wc -l)"
+    printf '  %-14s %2s videos\n' "$c" "$n"
+  done
+  printf '\nVideo:   %sx%s (9:16, cropped from the source)\n' "$WIDTH" "$HEIGHT"
+  printf 'Window:  %sx%s (%s%% of the video)\n' "$WIN_W" "$WIN_H" "$WIN_SCALE"
+  printf 'Cached:  %s file(s) in %s\n' \
+    "$(find "$CACHE_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l)" "$CACHE_DIR"
+}
+
+usage() {
+  cat <<'EOF'
+rotmarchy — click, and brainrot happens.
+
+USAGE
+  rotmarchy [category]        Random video, random spot, phone-shaped
+  rotmarchy cache [category]  Pre-download one video for offline use
+  rotmarchy stop              Close every one of them
+  rotmarchy status            Exit 0 if anything is playing
+  rotmarchy list              Show categories and window size
+
+Each call opens another window. Press q on one to close it.
+
+CATEGORIES
+  minecraft · familyguy · subwaysurfer · gta · random (default)
+
+Playback is silent — video only, no audio stream is even fetched.
+
+ENVIRONMENT
+  ROTMARCHY_HEIGHT        video height, width follows at 9:16 (default: 720)
+  ROTMARCHY_WINDOW_SCALE  window size as a % of the video (default: 60)
+  ROTMARCHY_FORMAT        override the yt-dlp format selector
+  ROTMARCHY_SOURCES       path to an alternate sources.tsv
+
+REQUIRES
+  mpv and yt-dlp. mpv ships the yt-dlp integration but not the binary —
+  you need both packages installed.
+EOF
+}
+
+main() {
+  [[ -f $SOURCES ]] || die "sources file not found: $SOURCES"
+  case "${1:-}" in
+    ''|random|minecraft|familyguy|subwaysurfer|gta) cmd_play "${1:-random}" ;;
+    play)             shift; cmd_play "${1:-random}" ;;
+    cache)            shift; cmd_cache "${1:-random}" ;;
+    stop|kill)        cmd_stop ;;
+    status)           is_running && exit 0 || exit 1 ;;
+    list|ls)          cmd_list ;;
+    -h|--help|help)   usage ;;
+    *)                die "unknown command '$1' (try: rotmarchy --help)" ;;
+  esac
+}
+
+main "$@"

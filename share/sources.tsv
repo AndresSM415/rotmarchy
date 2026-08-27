@@ -1,0 +1,32 @@
+# Rotmarchy brainrot source pool
+#
+# Format:  category <TAB> duration_seconds <TAB> youtube_id <TAB> title
+#
+# Duration is stored so a random seek offset can be picked offline, with no
+# extra network round-trip before playback starts. If you add a source, get
+# its duration with:
+#
+#   yt-dlp --flat-playlist --print "%(id)s|%(duration)s|%(title)s" "ytsearch1:<query>"
+#
+# Prefer videos labelled "No Copyright" / "free to use" — the defaults below
+# mostly are. Lines starting with # are ignored.
+
+minecraft	3621	_A3po0HYwkY	Minecraft Parkour Gameplay No Copyright (1 HOUR)
+minecraft	4814	n_Dv4JMiwK8	1 hour 20 minutes of relaxing Minecraft Parkour
+minecraft	4578	_GxTLyLyIbs	Minecraft Parkour Gameplay No Copyright 4K (1 HOUR)
+minecraft	6287	5ksFZIlktBY	Minecraft Parkour Gameplay No Copyright 4K (1 HOUR)
+
+familyguy	3866	L81dETsO9fM	FAMILY GUY - Funny moments 1 Hour Compilation 2
+familyguy	3671	exzlY4uPTOE	FAMILY GUY - Funny moments - 1 hour compilation
+familyguy	9057	sSnzoBU0Zg4	Family Guy Funny Moments 1 Hour Compilation
+familyguy	2494	mNZ7X1_1mHE	Family Guy Unlimited Funny Compilation
+
+subwaysurfer	3579	zZ7AimPACzc	Subway Surfers 1 hour Gameplay no commentary free to use
+subwaysurfer	4018	L_fcrOyoWZ8	Subway Surfers Compilation Non Stop
+subwaysurfer	3764	iKggOfcKM28	Subway Surfers Gameplay No Copyright 4K (1 HOUR)
+subwaysurfer	7575	vTfD20dbxho	2 Hour Compilation Subway Surfers Gameplay
+
+gta	757	ZtLrNBdXT7M	BEST GTA 5 MEGA RAMP No Copyright Gameplay 4K 60fps
+gta	3600	74voi0vlxHE	GTA 5 Gameplay No Copyright 1 HOUR (Mega Ramp)
+gta	883	0TysOfahbKU	GTA 5 Online Stunt Race Mega Ramp Gameplay (No commentary)
+gta	541	OoP7csWPmWo	GTA 5 MEGA RAMP Gameplay No Copyright 4K 60fps

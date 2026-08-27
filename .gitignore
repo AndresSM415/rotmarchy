@@ -1,0 +1,8 @@
+# Editor / OS noise
+*.bak
+*.bak.*
+*~
+.DS_Store
+
+# Local scratch
+/tmp/

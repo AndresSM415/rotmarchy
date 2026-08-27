@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.andressm415.rotmarchy",
+  "name": "Rotmarchy",
+  "version": "2.0.0",
+  "author": "AndresSM415",
+  "license": "MIT",
+  "description": "Click the brain in your bar and a random brainrot video appears somewhere on screen, cropped to a phone shape and silent. Click again for another one.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Rotmarchy",
+    "description": "One button, one behaviour: every click opens another silent phone-shaped video at a random spot on the screen. Minecraft parkour, Family Guy, Subway Surfers or GTA ramps, seeked to a random timestamp. Press q on a window to close it.",
+    "category": "Media",
+    "aliases": [
+      "brainrot",
+      "rotmarchy",
+      "mpv",
+      "video"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "category": "random",
+      "height": 720
+    },
+    "schema": [
+      {
+        "key": "category",
+        "type": "enum",
+        "label": "Category",
+        "description": "Which flavour of brainrot the button summons.",
+        "options": [
+          "random",
+          "minecraft",
+          "familyguy",
+          "subwaysurfer",
+          "gta"
+        ],
+        "defaultValue": "random"
+      },
+      {
+        "key": "height",
+        "type": "enum",
+        "label": "Video height",
+        "description": "Resolution the video is fetched and cropped at. The window itself is shown at 60% of this, so 720 fetches a 405x720 phone-shaped crop and displays it in a 243x432 window.",
+        "options": [
+          "480",
+          "720",
+          "1080"
+        ],
+        "defaultValue": "720"
+      }
+    ]
+  }
+}
