@@ -56,15 +56,11 @@ yt-dlp -F "https://www.youtube.com/watch?v=n_Dv4JMiwK8"
 omarchy plugin add https://github.com/AndresSM415/rotmarchy --enable
 ```
 
-Or to hack on it locally:
+To remove it again:
 
 ```bash
-git clone https://github.com/AndresSM415/rotmarchy && cd rotmarchy && ./install.sh
+omarchy plugin remove io.github.andressm415.rotmarchy
 ```
-
-`install.sh` copies the folder into `~/.config/omarchy/plugins/`, enables it,
-and restarts the shell. A copy rather than a symlink on purpose: the
-marketplace validator rejects symlinks inside a plugin folder.
 
 Like every Omarchy plugin, this runs unsandboxed with your user permissions.
 There is no sandbox to fall back on, so read it before you install it.
@@ -130,22 +126,13 @@ bin/rotmarchy status           # exit 0 if anything is playing
 bin/rotmarchy list             # categories, video and window size
 ```
 
-`ROTMARCHY_HEIGHT`, `ROTMARCHY_WINDOW_SCALE`, `ROTMARCHY_FORMAT` and
-`ROTMARCHY_SOURCES` all override behaviour; see `--help`.
+`ROTMARCHY_HEIGHT`, `ROTMARCHY_WINDOW_SCALE`, `ROTMARCHY_MAX_WINDOWS`,
+`ROTMARCHY_FORMAT` and `ROTMARCHY_SOURCES` all override behaviour; see
+`--help`.
 
-## Optional Hyprland rules
-
-Omarchy floats every `mpv` window by default, so this works out of the box.
-The optional rules only drop the border and pin the windows across workspaces:
-
-```bash
-cp hypr/rotmarchy.lua ~/.config/hypr/rotmarchy.lua
-echo 'require("hypr.rotmarchy")' >> ~/.config/hypr/hyprland.lua
-hyprctl reload
-```
-
-They deliberately set **no size or position** — the helper does that, and a
-static rule would only fight it.
+**No Hyprland config required.** Omarchy floats every `mpv` window by default,
+and everything else — size, position, pinning — is applied at runtime by
+address once the window maps. Nothing is written to `~/.config/hypr`.
 
 ## Adding your own videos
 
@@ -157,13 +144,22 @@ before playback. To add one:
 yt-dlp --flat-playlist --print "%(id)s|%(duration)s|%(title)s" "ytsearch5:your query"
 ```
 
+**Treat a sources file from someone else as untrusted.** Both fields are
+validated against their grammar before use — duration must be digits, the id
+must be exactly 11 characters of `[A-Za-z0-9_-]` — and malformed rows are
+dropped. That check is not cosmetic: `duration` reaches bash arithmetic, and
+bash evaluates a variable's *value* as an arithmetic expression, where an array
+subscript performs command substitution. A duration of `HEIGHT[$(cmd)]` would
+otherwise run `cmd`. `set -u` does not save you; it only rejects the payload if
+it names a variable the script has not already defined.
+
 ## Notes for anyone hacking on this
 
 **`Model.js` changes need a shell restart, not a hot reload.** The shell
 re-reads QML on save but keeps the already-evaluated `.pragma library` JS
 module cached in the engine, so an edited `Model.js` appears to do nothing —
-the old argv builder keeps running. `install.sh` restarts the shell for this
-reason. Symptom: the plugin invokes flags or subcommands you already deleted.
+the old argv builder keeps running. Symptom: the plugin invokes flags or
+subcommands you already deleted. Fix with `omarchy restart shell`.
 
 **`hyprctl dispatch` is Lua now.** On Hyprland 0.5x,
 `hyprctl dispatch movewindowpixel exact X Y,address:0x..` is a *syntax error* —
@@ -175,23 +171,32 @@ legacy string as a fallback, exactly as `omarchy-hyprland-window-pop` does.
 is the only thing that writes a video to disk, opt-in and one at a time.
 Sources are mostly published as "No Copyright" / "free to use".
 
+**`pkill -f` matches more than you mean.** It tests the whole command line, so
+a pattern like the app id also matches any shell that merely *mentions* it —
+including the one running `rotmarchy stop`. Processes are resolved to pids and
+confirmed to be `mpv` via `/proc/<pid>/comm` before anything is killed.
+
 **Security.** The plugin runs unsandboxed in the shell process, like every
 Omarchy plugin. It holds no credentials and makes no network requests from QML.
 Every command goes through `Util.execArgv` as an argv vector — no value is ever
 interpolated into a shell string — and settings from `shell.json` are
 normalized in `Model.js` before reaching an argv, so a hand-edited config
-cannot smuggle anything through.
+cannot smuggle anything through. Sources files are validated at the boundary
+(see above), and concurrent windows are capped so that `play`, which any local
+process can invoke over IPC, cannot be looped into a resource exhaustion.
 
 ## Layout
 
 ```
 manifest.json        plugin metadata + settings schema
 BarWidget.qml        the bar button (one click handler)
-assets/icon.png      the face, background removed
 Model.js             pure normalizers + argv building
+assets/icon.png      the face, background removed
 bin/rotmarchy        the engine (works standalone)
 share/sources.tsv    the video pool
-hypr/rotmarchy.lua   optional: borderless + pinned
 ```
+
+Install and removal go through `omarchy plugin add` / `remove`, so there are no
+install scripts and nothing is written outside the plugin folder.
 
 MIT.

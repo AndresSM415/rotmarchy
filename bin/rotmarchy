@@ -43,7 +43,30 @@ WIN_W="$(width_for "$WIN_H")"
 # No audio, so no need to fetch an audio stream at all.
 FORMAT="${ROTMARCHY_FORMAT:-bv*[height<=$HEIGHT]/b[height<=$HEIGHT]/b}"
 
+# Spamming the button is the point, but `play` is also reachable by any local
+# process over IPC, and each call spawns an mpv that streams video. Unbounded,
+# a loop exhausts memory and bandwidth. High enough to keep the joke, low
+# enough that a runaway caller cannot take the machine down.
+MAX_WINDOWS="${ROTMARCHY_MAX_WINDOWS:-12}"
+
 die() { printf 'rotmarchy: %s\n' "$*" >&2; exit 1; }
+
+# Our own mpv pids, and only those.
+#
+# `pgrep -f` matches the whole command line, so it also hits any unrelated
+# process that merely *mentions* the app id — a shell running `rotmarchy stop`,
+# for instance. Left unfiltered, `pkill -f` on the same pattern would kill that
+# shell. Confirming the process is actually mpv makes both the count and the
+# kill precise.
+rotmarchy_pids() {
+  local pid
+  while read -r pid; do
+    [[ -n $pid && -r /proc/$pid/comm ]] || continue
+    [[ "$(< "/proc/$pid/comm")" == mpv ]] && printf '%s\n' "$pid"
+  done < <(pgrep -f -- "--wayland-app-id=$APP_ID" 2>/dev/null)
+}
+
+running_count() { rotmarchy_pids | wc -l; }
 
 require_deps() {
   local missing=()
@@ -58,30 +81,54 @@ require_deps() {
 }
 
 categories() {
-  awk -F'\t' '!/^#/ && NF>=3 { print $1 }' "$SOURCES" | sort -u
+  awk -F'\t' "$row_filter"' { print $1 }' "$SOURCES" | sort -u
 }
 
+# A sources file is untrusted input. It ships with the plugin, but the README
+# invites people to add entries and ROTMARCHY_SOURCES points anywhere, so a
+# shared "sources pack" is data from a stranger.
+#
+# That matters because `duration` reaches bash arithmetic in random_start, and
+# bash evaluates a variable's *value* as an arithmetic expression — where an
+# array subscript performs command substitution. A duration of
+# `HEIGHT[$(cmd)]` therefore runs cmd. `set -u` does not help: it only rejects
+# the payload if it names a variable the script has not already defined.
+#
+# So both fields are validated against their real grammar, here at the
+# boundary, before anything downstream can interpret them.
+row_filter='!/^#/ && NF>=3 && $2 ~ /^[0-9]+$/ && $3 ~ /^[A-Za-z0-9_-]+$/ && length($3) == 11'
+
 pick() {
-  local want="${1:-random}" rows
+  local want="${1:-random}" rows duration id title
   if [[ $want == random || -z $want ]]; then
-    rows="$(awk -F'\t' '!/^#/ && NF>=3 { print $2"\t"$3"\t"$4 }' "$SOURCES")"
+    rows="$(awk -F'\t' "$row_filter"' { print $2"\t"$3"\t"$4 }' "$SOURCES")"
   else
-    rows="$(awk -F'\t' -v c="$want" '!/^#/ && NF>=3 && $1==c { print $2"\t"$3"\t"$4 }' "$SOURCES")"
+    rows="$(awk -F'\t' -v c="$want" "$row_filter"' && $1==c { print $2"\t"$3"\t"$4 }' "$SOURCES")"
   fi
-  [[ -n $rows ]] || die "no sources for category '$want' (try: rotmarchy list)"
-  printf '%s\n' "$rows" | shuf -n 1
+  [[ -n $rows ]] || die "no usable sources for category '$want' (try: rotmarchy list)"
+
+  IFS=$'\t' read -r duration id title < <(printf '%s\n' "$rows" | shuf -n 1)
+
+  # Belt and braces: re-check after the pick, so a mistake in the awk filter
+  # cannot quietly hand an interpreter something it should never see.
+  [[ $duration =~ ^[0-9]+$ ]] || die "refusing a non-numeric duration"
+  [[ $id =~ ^[A-Za-z0-9_-]{11}$ ]] || die "refusing a malformed video id"
+
+  printf '%s\t%s\t%s\n' "$duration" "$id" "$title"
 }
 
 # Random seek offset, holding back the last 5 minutes so we never open on the
 # outro card. Short clips just start from the top.
 random_start() {
   local duration="$1" window
-  window=$(( duration - 300 ))
+  [[ $duration =~ ^[0-9]+$ ]] || die "refusing a non-numeric duration"
+  window=$(( 10#$duration - 300 ))
   if (( window <= 0 )); then printf '0'; else printf '%s' "$(( RANDOM % window ))"; fi
 }
 
 resolve_media() {
   local id="$1" hit
+  [[ $id =~ ^[A-Za-z0-9_-]{11}$ ]] || die "refusing a malformed video id"
   hit="$(find "$CACHE_DIR" -maxdepth 1 -name "$id.*" -print -quit 2>/dev/null || true)"
   if [[ -n $hit ]]; then printf '%s' "$hit"; else printf 'https://www.youtube.com/watch?v=%s' "$id"; fi
 }
@@ -145,11 +192,20 @@ place_window() {
     resizewindowpixel "exact $WIN_W $WIN_H,$window"
   hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $x, y = $y })" \
     movewindowpixel "exact $x $y,$window"
+
+  # Pin so the video follows you across workspaces. This is a *toggle*, so it
+  # is only correct because nothing else pins the window first — which is why
+  # the plugin ships no Hyprland rules of its own.
+  hypr_dispatch "hl.dsp.window.pin({ window = \"$window\" })" pin "$window"
 }
 
 cmd_play() {
   local category="${1:-random}"
   require_deps
+
+  if (( $(running_count) >= MAX_WINDOWS )); then
+    die "already at $MAX_WINDOWS windows (raise ROTMARCHY_MAX_WINDOWS, or: rotmarchy stop)"
+  fi
 
   local duration id title start media token
   IFS=$'\t' read -r duration id title < <(pick "$category")
@@ -203,12 +259,19 @@ cmd_cache() {
 }
 
 is_running() {
-  pgrep -f "wayland-app-id=$APP_ID" >/dev/null 2>&1
+  [[ -n "$(rotmarchy_pids)" ]]
 }
 
+# Kills our mpv processes by pid rather than `pkill -f`, which would also match
+# any process whose command line merely contains the app id — including the
+# shell that invoked this.
 cmd_stop() {
-  if pkill -f "wayland-app-id=$APP_ID" 2>/dev/null; then
-    echo "⏹  stopped"
+  local pids
+  pids="$(rotmarchy_pids)"
+  if [[ -n $pids ]]; then
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    printf '⏹  stopped %s\n' "$(printf '%s\n' "$pids" | wc -l)"
   else
     echo "nothing playing"
   fi
@@ -219,7 +282,7 @@ cmd_list() {
   printf 'Sources: %s\n\n' "$SOURCES"
   local c n
   for c in $(categories); do
-    n="$(awk -F'\t' -v c="$c" '!/^#/ && NF>=3 && $1==c' "$SOURCES" | wc -l)"
+    n="$(awk -F'\t' -v c="$c" "$row_filter"' && $1==c' "$SOURCES" | wc -l)"
     printf '  %-14s %2s videos\n' "$c" "$n"
   done
   printf '\nVideo:   %sx%s (9:16, cropped from the source)\n' "$WIDTH" "$HEIGHT"
