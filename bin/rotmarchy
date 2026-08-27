@@ -186,8 +186,18 @@ place_window() {
 
   local window="address:$addr"
 
-  # Resize first: the move is absolute, so placing a still-wrong-sized window
-  # would leave it hanging off the edge.
+  # Float first, or nothing else takes. Omarchy's stock rule floats windows of
+  # class `mpv`, but this deliberately runs under its own app id to escape that
+  # rule's centring — which also means the window arrives tiled, and a tiled
+  # window ignores resizewindowpixel/movewindowpixel entirely.
+  #
+  # Like pin, this is a toggle, so it is only correct because no rule floats
+  # the window first. That is why the plugin ships no Hyprland config.
+  hypr_dispatch "hl.dsp.window.float({ window = \"$window\", action = \"toggle\" })" \
+    togglefloating "$window"
+
+  # Resize after floating: the move is absolute, so placing a still-wrong-sized
+  # window would leave it hanging off the edge.
   hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = $WIN_W, y = $WIN_H })" \
     resizewindowpixel "exact $WIN_W $WIN_H,$window"
   hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $x, y = $y })" \

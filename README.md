@@ -130,9 +130,16 @@ bin/rotmarchy list             # categories, video and window size
 `ROTMARCHY_FORMAT` and `ROTMARCHY_SOURCES` all override behaviour; see
 `--help`.
 
-**No Hyprland config required.** Omarchy floats every `mpv` window by default,
-and everything else — size, position, pinning — is applied at runtime by
-address once the window maps. Nothing is written to `~/.config/hypr`.
+**No Hyprland config required.** Floating, size, position and pinning are all
+applied at runtime by window address once the window maps, so nothing is
+written to `~/.config/hypr`.
+
+Worth knowing if you fork this: Omarchy's stock rule floats windows of class
+`mpv`, but Rotmarchy runs under its own `--wayland-app-id` precisely to escape
+that rule's centring — so the window arrives **tiled**, and a tiled window
+ignores `resizewindowpixel` and `movewindowpixel` outright. Float first, then
+size, then move. Both float and pin are *toggles*, which is only safe because
+no static rule touches these windows first.
 
 ## Adding your own videos
 
